@@ -4,6 +4,8 @@ from dataset import dataset_unpair
 from model import DRIT
 from saver import Saver
 
+torch.autograd.set_detect_anomaly(True)
+
 def main():
   # parse options
   parser = TrainOptions()

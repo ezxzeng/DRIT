@@ -4,6 +4,8 @@ from torch.autograd import Variable
 import functools
 from torch.optim import lr_scheduler
 import torch.nn.functional as F
+from torch.nn.utils import spectral_norm
+
 
 ####################################################################
 #------------------------- Discriminators --------------------------
@@ -144,37 +146,37 @@ class E_attr(nn.Module):
     self.model_a = nn.Sequential(
         nn.ReflectionPad2d(3),
         nn.Conv2d(input_dim_a, dim, 7, 1),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.ReflectionPad2d(1),
         nn.Conv2d(dim, dim*2, 4, 2),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.ReflectionPad2d(1),
         nn.Conv2d(dim*2, dim*4, 4, 2),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.ReflectionPad2d(1),
         nn.Conv2d(dim*4, dim*4, 4, 2),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.ReflectionPad2d(1),
         nn.Conv2d(dim*4, dim*4, 4, 2),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.AdaptiveAvgPool2d(1),
         nn.Conv2d(dim*4, output_nc, 1, 1, 0))
     self.model_b = nn.Sequential(
         nn.ReflectionPad2d(3),
         nn.Conv2d(input_dim_b, dim, 7, 1),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.ReflectionPad2d(1),
         nn.Conv2d(dim, dim*2, 4, 2),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.ReflectionPad2d(1),
         nn.Conv2d(dim*2, dim*4, 4, 2),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.ReflectionPad2d(1),
         nn.Conv2d(dim*4, dim*4, 4, 2),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.ReflectionPad2d(1),
         nn.Conv2d(dim*4, dim*4, 4, 2),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.AdaptiveAvgPool2d(1),
         nn.Conv2d(dim*4, output_nc, 1, 1, 0))
     return
@@ -292,15 +294,15 @@ class G(nn.Module):
 
     self.mlpA = nn.Sequential(
         nn.Linear(8, 256),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.Linear(256, 256),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.Linear(256, tch_add*4))
     self.mlpB = nn.Sequential(
         nn.Linear(8, 256),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.Linear(256, 256),
-        nn.ReLU(inplace=True),
+        nn.ReLU(inplace=False),
         nn.Linear(256, tch_add*4))
     return
 
@@ -440,11 +442,11 @@ def get_norm_layer(layer_type='instance'):
 
 def get_non_linearity(layer_type='relu'):
   if layer_type == 'relu':
-    nl_layer = functools.partial(nn.ReLU, inplace=True)
+    nl_layer = functools.partial(nn.ReLU, inplace=False)
   elif layer_type == 'lrelu':
     nl_layer = functools.partial(nn.LeakyReLU, negative_slope=0.2, inplace=False)
   elif layer_type == 'elu':
-    nl_layer = functools.partial(nn.ELU, inplace=True)
+    nl_layer = functools.partial(nn.ELU, inplace=False)
   else:
     raise NotImplementedError('nonlinearity activitation [%s] is not found' % layer_type)
   return nl_layer
@@ -506,7 +508,7 @@ class LeakyReLUConv2d(nn.Module):
       model += [nn.Conv2d(n_in, n_out, kernel_size=kernel_size, stride=stride, padding=0, bias=True)]
     if 'norm' == 'Instance':
       model += [nn.InstanceNorm2d(n_out, affine=False)]
-    model += [nn.LeakyReLU(inplace=True)]
+    model += [nn.LeakyReLU(inplace=False)]
     self.model = nn.Sequential(*model)
     self.model.apply(gaussian_weights_init)
     #elif == 'Group'
@@ -520,7 +522,7 @@ class ReLUINSConv2d(nn.Module):
     model += [nn.ReflectionPad2d(padding)]
     model += [nn.Conv2d(n_in, n_out, kernel_size=kernel_size, stride=stride, padding=0, bias=True)]
     model += [nn.InstanceNorm2d(n_out, affine=False)]
-    model += [nn.ReLU(inplace=True)]
+    model += [nn.ReLU(inplace=False)]
     self.model = nn.Sequential(*model)
     self.model.apply(gaussian_weights_init)
   def forward(self, x):
@@ -534,7 +536,7 @@ class INSResBlock(nn.Module):
     model = []
     model += self.conv3x3(inplanes, planes, stride)
     model += [nn.InstanceNorm2d(planes)]
-    model += [nn.ReLU(inplace=True)]
+    model += [nn.ReLU(inplace=False)]
     model += self.conv3x3(planes, planes)
     model += [nn.InstanceNorm2d(planes)]
     if dropout > 0:
@@ -604,87 +606,9 @@ class ReLUINSConvTranspose2d(nn.Module):
     model = []
     model += [nn.ConvTranspose2d(n_in, n_out, kernel_size=kernel_size, stride=stride, padding=padding, output_padding=output_padding, bias=True)]
     model += [LayerNorm(n_out)]
-    model += [nn.ReLU(inplace=True)]
+    model += [nn.ReLU(inplace=False)]
     self.model = nn.Sequential(*model)
     self.model.apply(gaussian_weights_init)
   def forward(self, x):
     return self.model(x)
-
-
-####################################################################
-#--------------------- Spectral Normalization ---------------------
-#  This part of code is copied from pytorch master branch (0.5.0)
-####################################################################
-class SpectralNorm(object):
-  def __init__(self, name='weight', n_power_iterations=1, dim=0, eps=1e-12):
-    self.name = name
-    self.dim = dim
-    if n_power_iterations <= 0:
-      raise ValueError('Expected n_power_iterations to be positive, but '
-                       'got n_power_iterations={}'.format(n_power_iterations))
-    self.n_power_iterations = n_power_iterations
-    self.eps = eps
-  def compute_weight(self, module):
-    weight = getattr(module, self.name + '_orig')
-    u = getattr(module, self.name + '_u')
-    weight_mat = weight
-    if self.dim != 0:
-      # permute dim to front
-      weight_mat = weight_mat.permute(self.dim,
-                                            *[d for d in range(weight_mat.dim()) if d != self.dim])
-    height = weight_mat.size(0)
-    weight_mat = weight_mat.reshape(height, -1)
-    with torch.no_grad():
-      for _ in range(self.n_power_iterations):
-        v = F.normalize(torch.matmul(weight_mat.t(), u), dim=0, eps=self.eps)
-        u = F.normalize(torch.matmul(weight_mat, v), dim=0, eps=self.eps)
-    sigma = torch.dot(u, torch.matmul(weight_mat, v))
-    weight = weight / sigma
-    return weight, u
-  def remove(self, module):
-    weight = getattr(module, self.name)
-    delattr(module, self.name)
-    delattr(module, self.name + '_u')
-    delattr(module, self.name + '_orig')
-    module.register_parameter(self.name, torch.nn.Parameter(weight))
-  def __call__(self, module, inputs):
-    if module.training:
-      weight, u = self.compute_weight(module)
-      setattr(module, self.name, weight)
-      setattr(module, self.name + '_u', u)
-    else:
-      r_g = getattr(module, self.name + '_orig').requires_grad
-      getattr(module, self.name).detach_().requires_grad_(r_g)
-
-  @staticmethod
-  def apply(module, name, n_power_iterations, dim, eps):
-    fn = SpectralNorm(name, n_power_iterations, dim, eps)
-    weight = module._parameters[name]
-    height = weight.size(dim)
-    u = F.normalize(weight.new_empty(height).normal_(0, 1), dim=0, eps=fn.eps)
-    delattr(module, fn.name)
-    module.register_parameter(fn.name + "_orig", weight)
-    module.register_buffer(fn.name, weight.data)
-    module.register_buffer(fn.name + "_u", u)
-    module.register_forward_pre_hook(fn)
-    return fn
-
-def spectral_norm(module, name='weight', n_power_iterations=1, eps=1e-12, dim=None):
-  if dim is None:
-    if isinstance(module, (torch.nn.ConvTranspose1d,
-                           torch.nn.ConvTranspose2d,
-                           torch.nn.ConvTranspose3d)):
-      dim = 1
-    else:
-      dim = 0
-  SpectralNorm.apply(module, name, n_power_iterations, dim, eps)
-  return module
-
-def remove_spectral_norm(module, name='weight'):
-  for k, hook in module._forward_pre_hooks.items():
-    if isinstance(hook, SpectralNorm) and hook.name == name:
-      hook.remove(module)
-      del module._forward_pre_hooks[k]
-      return module
-  raise ValueError("spectral_norm of '{}' not found in {}".format(name, module))
 
