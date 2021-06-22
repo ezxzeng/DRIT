@@ -51,7 +51,7 @@ def main():
         continue
       else:
         model.update_D(images_a, images_b)
-        model.update_EG()
+        model.update_EG(images_a, images_b)
 
       # save to display file
       if not opts.no_display_img:
