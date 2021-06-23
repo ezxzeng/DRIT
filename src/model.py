@@ -291,6 +291,8 @@ class DRIT(nn.Module):
     nn.utils.clip_grad_norm(self.disContent.parameters(), 5)
     self.disContent_opt.step()
 
+    return forward_results
+
   def backward_D(self, netD, real, fake):
     pred_fake = netD.forward(fake.detach())
     pred_real = netD.forward(real)
@@ -320,12 +322,13 @@ class DRIT(nn.Module):
     loss_D.backward()
     return loss_D
 
-  def update_EG(self, image_a, image_b):
+  def update_EG(self, image_a, image_b, forward_results=None):
     # input images
     half_size = 1
     real_A_encoded = image_a[0:half_size]
     real_B_encoded = image_b[0:half_size]
-    forward_results = self.forward(real_A_encoded, real_B_encoded)
+    if forward_results is None:
+      forward_results = self.forward(real_A_encoded, real_B_encoded)
 
     # update G, Ec, Ea
     self.enc_c_opt.zero_grad()
