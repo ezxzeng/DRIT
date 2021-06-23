@@ -4,6 +4,8 @@ from dataset import dataset_unpair
 from model import DRIT
 from saver import Saver
 
+torch.autograd.set_detect_anomaly(True)
+
 def main():
   # parse options
   parser = TrainOptions()
@@ -48,8 +50,8 @@ def main():
         model.update_D_content(images_a, images_b)
         continue
       else:
-        model.update_D(images_a, images_b)
-        model.update_EG()
+        forward_results = model.update_D(images_a, images_b)
+        model.update_EG(images_a, images_b, forward_results)
 
       # save to display file
       if not opts.no_display_img:

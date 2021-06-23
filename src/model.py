@@ -1,6 +1,26 @@
+from collections import namedtuple
 import networks
 import torch
 import torch.nn as nn
+
+EncResult = namedtuple("EncResult", (
+    "z_content_a", "z_content_b", "z_attr_a", "z_attr_b", "mu_a", "logvar_a", "mu_b", "logvar_b"
+  ), defaults=(None, None, None, None))
+ForwardResult = namedtuple("ForwardResult", (
+    "fake_A_encoded", 
+    "fake_B_encoded", 
+    "fake_AA_encoded",
+    "fake_BB_encoded",
+    "fake_A_random", 
+    "fake_B_random", 
+    "fake_A_recon",
+    "fake_B_recon",
+    "z_random", 
+    "enc_result", 
+    "fake_A_random2", 
+    "fake_B_random2", 
+    "z_random2"
+  ), defaults=(None, None, None))
 
 class DRIT(nn.Module):
   def __init__(self, opts):
@@ -89,180 +109,197 @@ class DRIT(nn.Module):
     return z
 
   def test_forward(self, image, a2b=True):
-    self.z_random = self.get_z_random(image.size(0), self.nz, 'gauss')
+    z_random = self.get_z_random(image.size(0), self.nz, 'gauss')
     if a2b:
-        self.z_content = self.enc_c.forward_a(image)
-        output = self.gen.forward_b(self.z_content, self.z_random)
+        z_content = self.enc_c.forward_a(image)
+        output = self.gen.forward_b(z_content, z_random)
     else:
-        self.z_content = self.enc_c.forward_b(image)
-        output = self.gen.forward_a(self.z_content, self.z_random)
+        z_content = self.enc_c.forward_b(image)
+        output = self.gen.forward_a(z_content, z_random)
     return output
 
   def test_forward_transfer(self, image_a, image_b, a2b=True):
-    self.z_content_a, self.z_content_b = self.enc_c.forward(image_a, image_b)
+    z_content_a, z_content_b = self.enc_c.forward(image_a, image_b)
     if self.concat:
-      self.mu_a, self.logvar_a, self.mu_b, self.logvar_b = self.enc_a.forward(image_a, image_b)
-      std_a = self.logvar_a.mul(0.5).exp_()
+      mu_a, logvar_a, mu_b, logvar_b = self.enc_a.forward(image_a, image_b)
+      std_a = logvar_a.mul(0.5).exp()
       eps = self.get_z_random(std_a.size(0), std_a.size(1), 'gauss')
-      self.z_attr_a = eps.mul(std_a).add_(self.mu_a)
-      std_b = self.logvar_b.mul(0.5).exp_()
+      z_attr_a = eps.mul(std_a).add(mu_a)
+      std_b = logvar_b.mul(0.5).exp()
       eps = self.get_z_random(std_b.size(0), std_b.size(1), 'gauss')
-      self.z_attr_b = eps.mul(std_b).add_(self.mu_b)
+      z_attr_b = eps.mul(std_b).add(mu_b)
     else:
-      self.z_attr_a, self.z_attr_b = self.enc_a.forward(image_a, image_b)
+      z_attr_a, z_attr_b = self.enc_a.forward(image_a, image_b)
     if a2b:
-      output = self.gen.forward_b(self.z_content_a, self.z_attr_b)
+      output = self.gen.forward_b(z_content_a, z_attr_b)
     else:
-      output = self.gen.forward_a(self.z_content_b, self.z_attr_a)
+      output = self.gen.forward_a(z_content_b, z_attr_a)
     return output
 
-  def forward(self):
-    # input images
-    half_size = 1
-    real_A = self.input_A
-    real_B = self.input_B
-    self.real_A_encoded = real_A[0:half_size]
-    self.real_A_random = real_A[half_size:]
-    self.real_B_encoded = real_B[0:half_size]
-    self.real_B_random = real_B[half_size:]
-
+  def encode(self, real_A_encoded, real_B_encoded) -> EncResult:
     # get encoded z_c
-    self.z_content_a, self.z_content_b = self.enc_c.forward(self.real_A_encoded, self.real_B_encoded)
+    z_content_a, z_content_b = self.enc_c.forward(real_A_encoded, real_B_encoded)
 
     # get encoded z_a
     if self.concat:
-      self.mu_a, self.logvar_a, self.mu_b, self.logvar_b = self.enc_a.forward(self.real_A_encoded, self.real_B_encoded)
-      std_a = self.logvar_a.mul(0.5).exp_()
+      mu_a, logvar_a, mu_b, logvar_b = self.enc_a.forward(real_A_encoded, real_B_encoded)
+      std_a = logvar_b.mul(0.5).exp()
       eps_a = self.get_z_random(std_a.size(0), std_a.size(1), 'gauss')
-      self.z_attr_a = eps_a.mul(std_a).add_(self.mu_a)
-      std_b = self.logvar_b.mul(0.5).exp_()
+      z_attr_a = eps_a.mul(std_a).add(mu_a)
+      std_b = logvar_b.mul(0.5).exp()
       eps_b = self.get_z_random(std_b.size(0), std_b.size(1), 'gauss')
-      self.z_attr_b = eps_b.mul(std_b).add_(self.mu_b)
+      z_attr_b = eps_b.mul(std_b).add(mu_b)
+      return EncResult(z_content_a, z_content_b, z_attr_a, z_attr_b, mu_a, logvar_a, mu_b, logvar_b)
     else:
-      self.z_attr_a, self.z_attr_b = self.enc_a.forward(self.real_A_encoded, self.real_B_encoded)
+      z_attr_a, z_attr_b = self.enc_a.forward(real_A_encoded, real_B_encoded)
+      return EncResult(z_content_a, z_content_b, z_attr_a, z_attr_b) 
+
+  def forward(self, real_A_encoded, real_B_encoded) -> ForwardResult:
+    # get encoded z_c, z_a
+    enc_result = self.encode(real_A_encoded, real_B_encoded)
 
     # get random z_a
-    self.z_random = self.get_z_random(self.real_A_encoded.size(0), self.nz, 'gauss')
+    z_random = self.get_z_random(real_A_encoded.size(0), self.nz, 'gauss')
     if not self.no_ms:
-      self.z_random2 = self.get_z_random(self.real_A_encoded.size(0), self.nz, 'gauss')
-
+      z_random2 = self.get_z_random(real_A_encoded.size(0), self.nz, 'gauss')
+      
     # first cross translation
     if not self.no_ms:
-      input_content_forA = torch.cat((self.z_content_b, self.z_content_a, self.z_content_b, self.z_content_b),0)
-      input_content_forB = torch.cat((self.z_content_a, self.z_content_b, self.z_content_a, self.z_content_a),0)
-      input_attr_forA = torch.cat((self.z_attr_a, self.z_attr_a, self.z_random, self.z_random2),0)
-      input_attr_forB = torch.cat((self.z_attr_b, self.z_attr_b, self.z_random, self.z_random2),0)
-      output_fakeA = self.gen.forward_a(input_content_forA, input_attr_forA)
-      output_fakeB = self.gen.forward_b(input_content_forB, input_attr_forB)
-      self.fake_A_encoded, self.fake_AA_encoded, self.fake_A_random, self.fake_A_random2 = torch.split(output_fakeA, self.z_content_a.size(0), dim=0)
-      self.fake_B_encoded, self.fake_BB_encoded, self.fake_B_random, self.fake_B_random2 = torch.split(output_fakeB, self.z_content_a.size(0), dim=0)
+      input_content_forA = torch.cat((enc_result.z_content_b, enc_result.z_content_a, enc_result.z_content_b, enc_result.z_content_b), 0)
+      input_content_forB = torch.cat((enc_result.z_content_a, enc_result.z_content_b, enc_result.z_content_a, enc_result.z_content_a), 0)
+      input_attr_forA = torch.cat((enc_result.z_attr_a, enc_result.z_attr_a, z_random, z_random2), 0)
+      input_attr_forB = torch.cat((enc_result.z_attr_b, enc_result.z_attr_b, z_random, z_random2), 0)
     else:
-      input_content_forA = torch.cat((self.z_content_b, self.z_content_a, self.z_content_b),0)
-      input_content_forB = torch.cat((self.z_content_a, self.z_content_b, self.z_content_a),0)
-      input_attr_forA = torch.cat((self.z_attr_a, self.z_attr_a, self.z_random),0)
-      input_attr_forB = torch.cat((self.z_attr_b, self.z_attr_b, self.z_random),0)
-      output_fakeA = self.gen.forward_a(input_content_forA, input_attr_forA)
-      output_fakeB = self.gen.forward_b(input_content_forB, input_attr_forB)
-      self.fake_A_encoded, self.fake_AA_encoded, self.fake_A_random = torch.split(output_fakeA, self.z_content_a.size(0), dim=0)
-      self.fake_B_encoded, self.fake_BB_encoded, self.fake_B_random = torch.split(output_fakeB, self.z_content_a.size(0), dim=0)
+      input_content_forA = torch.cat((enc_result.z_content_b, enc_result.z_content_a, enc_result.z_content_b),0)
+      input_content_forB = torch.cat((enc_result.z_content_a, enc_result.z_content_b, enc_result.z_content_a),0)
+      input_attr_forA = torch.cat((enc_result.z_attr_a, enc_result.z_attr_a, z_random),0)
+      input_attr_forB = torch.cat((enc_result.z_attr_b, enc_result.z_attr_b, z_random),0)
+    
+    output_fakeA = self.gen.forward_a(input_content_forA, input_attr_forA)
+    output_fakeB = self.gen.forward_b(input_content_forB, input_attr_forB)
 
-    # get reconstructed encoded z_c
-    self.z_content_recon_b, self.z_content_recon_a = self.enc_c.forward(self.fake_A_encoded, self.fake_B_encoded)
-
-    # get reconstructed encoded z_a
-    if self.concat:
-      self.mu_recon_a, self.logvar_recon_a, self.mu_recon_b, self.logvar_recon_b = self.enc_a.forward(self.fake_A_encoded, self.fake_B_encoded)
-      std_a = self.logvar_recon_a.mul(0.5).exp_()
-      eps_a = self.get_z_random(std_a.size(0), std_a.size(1), 'gauss')
-      self.z_attr_recon_a = eps_a.mul(std_a).add_(self.mu_recon_a)
-      std_b = self.logvar_recon_b.mul(0.5).exp_()
-      eps_b = self.get_z_random(std_b.size(0), std_b.size(1), 'gauss')
-      self.z_attr_recon_b = eps_b.mul(std_b).add_(self.mu_recon_b)
+    if not self.no_ms:
+      fake_A_encoded, fake_AA_encoded, fake_A_random, fake_A_random2 = torch.split(output_fakeA, enc_result.z_content_a.size(0), dim=0)
+      fake_B_encoded, fake_BB_encoded, fake_B_random, fake_B_random2 = torch.split(output_fakeB, enc_result.z_content_a.size(0), dim=0)
     else:
-      self.z_attr_recon_a, self.z_attr_recon_b = self.enc_a.forward(self.fake_A_encoded, self.fake_B_encoded)
+      fake_A_encoded, fake_AA_encoded, fake_A_random = torch.split(output_fakeA, enc_result.z_content_a.size(0), dim=0)
+      fake_B_encoded, fake_BB_encoded, fake_B_random = torch.split(output_fakeB, enc_result.z_content_a.size(0), dim=0)
+
+
+    # get reconstructed encoded z_c, z_a
+    enc_result_recon = self.encode(fake_A_encoded, fake_B_encoded)
 
     # second cross translation
-    self.fake_A_recon = self.gen.forward_a(self.z_content_recon_a, self.z_attr_recon_a)
-    self.fake_B_recon = self.gen.forward_b(self.z_content_recon_b, self.z_attr_recon_b)
-
-    # for display
-    self.image_display = torch.cat((self.real_A_encoded[0:1].detach().cpu(), self.fake_B_encoded[0:1].detach().cpu(), \
-                                    self.fake_B_random[0:1].detach().cpu(), self.fake_AA_encoded[0:1].detach().cpu(), self.fake_A_recon[0:1].detach().cpu(), \
-                                    self.real_B_encoded[0:1].detach().cpu(), self.fake_A_encoded[0:1].detach().cpu(), \
-                                    self.fake_A_random[0:1].detach().cpu(), self.fake_BB_encoded[0:1].detach().cpu(), self.fake_B_recon[0:1].detach().cpu()), dim=0)
-
-    # for latent regression
-    if self.concat:
-      self.mu2_a, _, self.mu2_b, _ = self.enc_a.forward(self.fake_A_random, self.fake_B_random)
+    fake_A_recon = self.gen.forward_a(enc_result_recon.z_content_a, enc_result_recon.z_attr_a)
+    fake_B_recon = self.gen.forward_b(enc_result_recon.z_content_b, enc_result_recon.z_attr_b)
+    
+    if not self.no_ms:
+      return ForwardResult(
+        fake_A_encoded, 
+        fake_B_encoded, 
+        fake_AA_encoded,
+        fake_BB_encoded,
+        fake_A_random, 
+        fake_B_random,  
+        fake_A_recon,
+        fake_B_recon,
+        z_random, 
+        enc_result, 
+        fake_A_random2, 
+        fake_B_random2, 
+        z_random2
+        )
     else:
-      self.z_attr_random_a, self.z_attr_random_b = self.enc_a.forward(self.fake_A_random, self.fake_B_random)
+      return ForwardResult(
+        fake_A_encoded, 
+        fake_B_encoded, 
+        fake_AA_encoded,
+        fake_BB_encoded,
+        fake_A_random, 
+        fake_B_random,  
+        fake_A_recon,
+        fake_B_recon,
+        z_random, 
+        enc_result,
+        )
 
-  def forward_content(self):
+  def forward_content(self, image_a, image_b):
     half_size = 1
-    self.real_A_encoded = self.input_A[0:half_size]
-    self.real_B_encoded = self.input_B[0:half_size]
+    self.real_A_encoded = image_a[0:half_size]
+    self.real_B_encoded = image_b[0:half_size]
     # get encoded z_c
     self.z_content_a, self.z_content_b = self.enc_c.forward(self.real_A_encoded, self.real_B_encoded)
 
   def update_D_content(self, image_a, image_b):
-    self.input_A = image_a
-    self.input_B = image_b
-    self.forward_content()
+    self.forward_content(image_a, image_b)
     self.disContent_opt.zero_grad()
     loss_D_Content = self.backward_contentD(self.z_content_a, self.z_content_b)
     self.disContent_loss = loss_D_Content.item()
-    nn.utils.clip_grad_norm_(self.disContent.parameters(), 5)
+    nn.utils.clip_grad_norm(self.disContent.parameters(), 5)
     self.disContent_opt.step()
 
   def update_D(self, image_a, image_b):
-    self.input_A = image_a
-    self.input_B = image_b
-    self.forward()
+    # input images
+    half_size = 1
+    real_A_encoded = image_a[0:half_size]
+    real_A_random = image_a[half_size:]
+    real_B_encoded = image_b[0:half_size]
+    real_B_random = image_b[half_size:]
+    forward_results = self.forward(real_A_encoded, real_B_encoded)
+
+    # for display
+    self.image_display = torch.clone(torch.cat((real_A_encoded[0:1].detach().cpu(), forward_results.fake_B_encoded[0:1].detach().cpu(), \
+                                    forward_results.fake_B_random[0:1].detach().cpu(), forward_results.fake_AA_encoded[0:1].detach().cpu(), forward_results.fake_A_recon[0:1].detach().cpu(), \
+                                    real_B_encoded[0:1].detach().cpu(), forward_results.fake_A_encoded[0:1].detach().cpu(), \
+                                    forward_results.fake_A_random[0:1].detach().cpu(), forward_results.fake_BB_encoded[0:1].detach().cpu(), forward_results.fake_B_recon[0:1].detach().cpu()), dim=0))
+
 
     # update disA
     self.disA_opt.zero_grad()
-    loss_D1_A = self.backward_D(self.disA, self.real_A_encoded, self.fake_A_encoded)
+    loss_D1_A = self.backward_D(self.disA, real_A_encoded, forward_results.fake_A_encoded)
     self.disA_loss = loss_D1_A.item()
     self.disA_opt.step()
 
     # update disA2
     self.disA2_opt.zero_grad()
-    loss_D2_A = self.backward_D(self.disA2, self.real_A_random, self.fake_A_random)
+    loss_D2_A = self.backward_D(self.disA2, real_A_random, forward_results.fake_A_random)
     self.disA2_loss = loss_D2_A.item()
     if not self.no_ms:
-      loss_D2_A2 = self.backward_D(self.disA2, self.real_A_random, self.fake_A_random2)
+      loss_D2_A2 = self.backward_D(self.disA2, real_A_random, forward_results.fake_A_random2)
       self.disA2_loss += loss_D2_A2.item()
     self.disA2_opt.step()
 
     # update disB
     self.disB_opt.zero_grad()
-    loss_D1_B = self.backward_D(self.disB, self.real_B_encoded, self.fake_B_encoded)
+    loss_D1_B = self.backward_D(self.disB, real_B_encoded, forward_results.fake_B_encoded)
     self.disB_loss = loss_D1_B.item()
     self.disB_opt.step()
 
     # update disB2
     self.disB2_opt.zero_grad()
-    loss_D2_B = self.backward_D(self.disB2, self.real_B_random, self.fake_B_random)
+    loss_D2_B = self.backward_D(self.disB2, real_B_random, forward_results.fake_B_random)
     self.disB2_loss = loss_D2_B.item()
     if not self.no_ms:
-      loss_D2_B2 = self.backward_D(self.disB2, self.real_B_random, self.fake_B_random2)
+      loss_D2_B2 = self.backward_D(self.disB2, real_B_random, forward_results.fake_B_random2)
       self.disB2_loss += loss_D2_B2.item()
     self.disB2_opt.step()
 
     # update disContent
     self.disContent_opt.zero_grad()
-    loss_D_Content = self.backward_contentD(self.z_content_a, self.z_content_b)
+    loss_D_Content = self.backward_contentD(forward_results.enc_result.z_content_a, forward_results.enc_result.z_content_b)
     self.disContent_loss = loss_D_Content.item()
-    nn.utils.clip_grad_norm_(self.disContent.parameters(), 5)
+    nn.utils.clip_grad_norm(self.disContent.parameters(), 5)
     self.disContent_opt.step()
+
+    return forward_results
 
   def backward_D(self, netD, real, fake):
     pred_fake = netD.forward(fake.detach())
     pred_real = netD.forward(real)
     loss_D = 0
     for it, (out_a, out_b) in enumerate(zip(pred_fake, pred_real)):
-      out_fake = nn.functional.sigmoid(out_a)
-      out_real = nn.functional.sigmoid(out_b)
+      out_fake = torch.sigmoid(out_a)
+      out_real = torch.sigmoid(out_b)
       all0 = torch.zeros_like(out_fake).cuda(self.gpu)
       all1 = torch.ones_like(out_real).cuda(self.gpu)
       ad_fake_loss = nn.functional.binary_cross_entropy(out_fake, all0)
@@ -275,8 +312,8 @@ class DRIT(nn.Module):
     pred_fake = self.disContent.forward(imageA.detach())
     pred_real = self.disContent.forward(imageB.detach())
     for it, (out_a, out_b) in enumerate(zip(pred_fake, pred_real)):
-      out_fake = nn.functional.sigmoid(out_a)
-      out_real = nn.functional.sigmoid(out_b)
+      out_fake = torch.sigmoid(out_a)
+      out_real = torch.sigmoid(out_b)
       all1 = torch.ones((out_real.size(0))).cuda(self.gpu)
       all0 = torch.zeros((out_fake.size(0))).cuda(self.gpu)
       ad_true_loss = nn.functional.binary_cross_entropy(out_real, all1)
@@ -285,51 +322,60 @@ class DRIT(nn.Module):
     loss_D.backward()
     return loss_D
 
-  def update_EG(self):
+  def update_EG(self, image_a, image_b, forward_results=None):
+    # input images
+    half_size = 1
+    real_A_encoded = image_a[0:half_size]
+    real_B_encoded = image_b[0:half_size]
+    if forward_results is None:
+      forward_results = self.forward(real_A_encoded, real_B_encoded)
+
     # update G, Ec, Ea
     self.enc_c_opt.zero_grad()
     self.enc_a_opt.zero_grad()
     self.gen_opt.zero_grad()
-    self.backward_EG()
+    self.backward_EG(forward_results, real_A_encoded, real_B_encoded)
     self.enc_c_opt.step()
     self.enc_a_opt.step()
     self.gen_opt.step()
 
+    forward_results = self.forward(real_A_encoded, real_B_encoded)
+
     # update G, Ec
     self.enc_c_opt.zero_grad()
     self.gen_opt.zero_grad()
-    self.backward_G_alone()
+    self.backward_G_alone(forward_results)
     self.enc_c_opt.step()
     self.gen_opt.step()
 
-  def backward_EG(self):
+  def backward_EG(self, forward_results, real_A_encoded, real_B_encoded):
     # content Ladv for generator
-    loss_G_GAN_Acontent = self.backward_G_GAN_content(self.z_content_a)
-    loss_G_GAN_Bcontent = self.backward_G_GAN_content(self.z_content_b)
+    loss_G_GAN_Acontent = self.backward_G_GAN_content(forward_results.enc_result.z_content_a)
+    loss_G_GAN_Bcontent = self.backward_G_GAN_content(forward_results.enc_result.z_content_b)
 
     # Ladv for generator
-    loss_G_GAN_A = self.backward_G_GAN(self.fake_A_encoded, self.disA)
-    loss_G_GAN_B = self.backward_G_GAN(self.fake_B_encoded, self.disB)
+    loss_G_GAN_A = self.backward_G_GAN(forward_results.fake_A_encoded, self.disA)
+    loss_G_GAN_B = self.backward_G_GAN(forward_results.fake_B_encoded, self.disB)
 
     # KL loss - z_a
     if self.concat:
-      kl_element_a = self.mu_a.pow(2).add_(self.logvar_a.exp()).mul_(-1).add_(1).add_(self.logvar_a)
-      loss_kl_za_a = torch.sum(kl_element_a).mul_(-0.5) * 0.01
-      kl_element_b = self.mu_b.pow(2).add_(self.logvar_b.exp()).mul_(-1).add_(1).add_(self.logvar_b)
-      loss_kl_za_b = torch.sum(kl_element_b).mul_(-0.5) * 0.01
+      kl_element_a = forward_results.enc_result.mu_a.pow(2).add(forward_results.enc_result.logvar_a.exp()).mul(-1).add(1).add(forward_results.enc_result.logvar_a)
+      loss_kl_za_a = torch.sum(kl_element_a).mul(-0.5) * 0.01
+      kl_element_b = forward_results.enc_result.mu_b.pow(2).add(forward_results.enc_result.logvar_b.exp()).mul(-1).add(1).add(forward_results.enc_result.logvar_b)
+      loss_kl_za_b = torch.sum(kl_element_b).mul(-0.5) * 0.01
     else:
-      loss_kl_za_a = self._l2_regularize(self.z_attr_a) * 0.01
-      loss_kl_za_b = self._l2_regularize(self.z_attr_b) * 0.01
+      loss_kl_za_a = self._l2_regularize(forward_results.enc_result.z_attr_a) * 0.01
+      loss_kl_za_b = self._l2_regularize(forward_results.enc_result.z_attr_b) * 0.01
 
     # KL loss - z_c
-    loss_kl_zc_a = self._l2_regularize(self.z_content_a) * 0.01
-    loss_kl_zc_b = self._l2_regularize(self.z_content_b) * 0.01
+    loss_kl_zc_a = self._l2_regularize(forward_results.enc_result.z_content_a) * 0.01
+    loss_kl_zc_b = self._l2_regularize(forward_results.enc_result.z_content_b) * 0.01
 
     # cross cycle consistency loss
-    loss_G_L1_A = self.criterionL1(self.fake_A_recon, self.real_A_encoded) * 10
-    loss_G_L1_B = self.criterionL1(self.fake_B_recon, self.real_B_encoded) * 10
-    loss_G_L1_AA = self.criterionL1(self.fake_AA_encoded, self.real_A_encoded) * 10
-    loss_G_L1_BB = self.criterionL1(self.fake_BB_encoded, self.real_B_encoded) * 10
+    loss_G_L1_A = self.criterionL1(forward_results.fake_A_recon, real_A_encoded) * 10
+    loss_G_L1_B = self.criterionL1(forward_results.fake_B_recon, real_B_encoded) * 10
+    loss_G_L1_AA = self.criterionL1(forward_results.fake_AA_encoded, real_A_encoded) * 10
+    loss_G_L1_BB = self.criterionL1(forward_results.fake_BB_encoded, real_B_encoded) * 10
 
     loss_G = loss_G_GAN_A + loss_G_GAN_B + \
              loss_G_GAN_Acontent + loss_G_GAN_Bcontent + \
@@ -338,7 +384,7 @@ class DRIT(nn.Module):
              loss_kl_zc_a + loss_kl_zc_b + \
              loss_kl_za_a + loss_kl_za_b
 
-    loss_G.backward(retain_graph=True)
+    loss_G.backward()
 
     self.gan_loss_a = loss_G_GAN_A.item()
     self.gan_loss_b = loss_G_GAN_B.item()
@@ -357,7 +403,7 @@ class DRIT(nn.Module):
   def backward_G_GAN_content(self, data):
     outs = self.disContent.forward(data)
     for out in outs:
-      outputs_fake = nn.functional.sigmoid(out)
+      outputs_fake = torch.sigmoid(out)
       all_half = 0.5*torch.ones((outputs_fake.size(0))).cuda(self.gpu)
       ad_loss = nn.functional.binary_cross_entropy(outputs_fake, all_half)
     return ad_loss
@@ -366,33 +412,36 @@ class DRIT(nn.Module):
     outs_fake = netD.forward(fake)
     loss_G = 0
     for out_a in outs_fake:
-      outputs_fake = nn.functional.sigmoid(out_a)
+      outputs_fake = torch.sigmoid(out_a)
       all_ones = torch.ones_like(outputs_fake).cuda(self.gpu)
       loss_G += nn.functional.binary_cross_entropy(outputs_fake, all_ones)
     return loss_G
 
-  def backward_G_alone(self):
+  def backward_G_alone(self, forward_results):
     # Ladv for generator
-    loss_G_GAN2_A = self.backward_G_GAN(self.fake_A_random, self.disA2)
-    loss_G_GAN2_B = self.backward_G_GAN(self.fake_B_random, self.disB2)
+    loss_G_GAN2_A = self.backward_G_GAN(forward_results.fake_A_random, self.disA2)
+    loss_G_GAN2_B = self.backward_G_GAN(forward_results.fake_B_random, self.disB2)
     if not self.no_ms:
-      loss_G_GAN2_A2 = self.backward_G_GAN(self.fake_A_random2, self.disA2)
-      loss_G_GAN2_B2 = self.backward_G_GAN(self.fake_B_random2, self.disB2)
+      loss_G_GAN2_A2 = self.backward_G_GAN(forward_results.fake_A_random2, self.disA2)
+      loss_G_GAN2_B2 = self.backward_G_GAN(forward_results.fake_B_random2, self.disB2)
 
     # mode seeking loss for A-->B and B-->A
     if not self.no_ms:
-      lz_AB = torch.mean(torch.abs(self.fake_B_random2 - self.fake_B_random)) / torch.mean(torch.abs(self.z_random2 - self.z_random))
-      lz_BA = torch.mean(torch.abs(self.fake_A_random2 - self.fake_A_random)) / torch.mean(torch.abs(self.z_random2 - self.z_random))
+      lz_AB = torch.mean(torch.abs(forward_results.fake_B_random2 - forward_results.fake_B_random)) / torch.mean(torch.abs(forward_results.z_random2 - forward_results.z_random))
+      lz_BA = torch.mean(torch.abs(forward_results.fake_A_random2 - forward_results.fake_A_random)) / torch.mean(torch.abs(forward_results.z_random2 - forward_results.z_random))
       eps = 1 * 1e-5
       loss_lz_AB = 1 / (lz_AB + eps)
       loss_lz_BA = 1 / (lz_BA + eps)
     # latent regression loss
+    # run self.forward before this
     if self.concat:
-      loss_z_L1_a = torch.mean(torch.abs(self.mu2_a - self.z_random)) * 10
-      loss_z_L1_b = torch.mean(torch.abs(self.mu2_b - self.z_random)) * 10
+      mu2_a, _, mu2_b, _ = self.enc_a.forward(forward_results.fake_A_random, forward_results.fake_B_random)
+      loss_z_L1_a = torch.mean(torch.abs(mu2_a - forward_results.z_random)) * 10
+      loss_z_L1_b = torch.mean(torch.abs(mu2_b - forward_results.z_random)) * 10
     else:
-      loss_z_L1_a = torch.mean(torch.abs(self.z_attr_random_a - self.z_random)) * 10
-      loss_z_L1_b = torch.mean(torch.abs(self.z_attr_random_b - self.z_random)) * 10
+      z_attr_random_a, z_attr_random_b = self.enc_a.forward(forward_results.fake_A_random, forward_results.fake_B_random)
+      loss_z_L1_a = torch.mean(torch.abs(z_attr_random_a - forward_results.z_random)) * 10
+      loss_z_L1_b = torch.mean(torch.abs(z_attr_random_b - forward_results.z_random)) * 10
 
     loss_z_L1 = loss_z_L1_a + loss_z_L1_b + loss_G_GAN2_A + loss_G_GAN2_B
     if not self.no_ms:
