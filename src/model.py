@@ -109,31 +109,31 @@ class DRIT(nn.Module):
     return z
 
   def test_forward(self, image, a2b=True):
-    self.z_random = self.get_z_random(image.size(0), self.nz, 'gauss')
+    z_random = self.get_z_random(image.size(0), self.nz, 'gauss')
     if a2b:
-        self.z_content = self.enc_c.forward_a(image)
-        output = self.gen.forward_b(self.z_content, self.z_random)
+        z_content = self.enc_c.forward_a(image)
+        output = self.gen.forward_b(z_content, z_random)
     else:
-        self.z_content = self.enc_c.forward_b(image)
-        output = self.gen.forward_a(self.z_content, self.z_random)
+        z_content = self.enc_c.forward_b(image)
+        output = self.gen.forward_a(z_content, z_random)
     return output
 
   def test_forward_transfer(self, image_a, image_b, a2b=True):
-    self.z_content_a, self.z_content_b = self.enc_c.forward(image_a, image_b)
+    z_content_a, z_content_b = self.enc_c.forward(image_a, image_b)
     if self.concat:
-      self.mu_a, self.logvar_a, self.mu_b, self.logvar_b = self.enc_a.forward(image_a, image_b)
-      std_a = self.logvar_a.mul(0.5).exp()
+      mu_a, logvar_a, mu_b, logvar_b = self.enc_a.forward(image_a, image_b)
+      std_a = logvar_a.mul(0.5).exp()
       eps = self.get_z_random(std_a.size(0), std_a.size(1), 'gauss')
-      self.z_attr_a = eps.mul(std_a).add(self.mu_a)
-      std_b = self.logvar_b.mul(0.5).exp()
+      z_attr_a = eps.mul(std_a).add(mu_a)
+      std_b = logvar_b.mul(0.5).exp()
       eps = self.get_z_random(std_b.size(0), std_b.size(1), 'gauss')
-      self.z_attr_b = eps.mul(std_b).add(self.mu_b)
+      z_attr_b = eps.mul(std_b).add(mu_b)
     else:
-      self.z_attr_a, self.z_attr_b = self.enc_a.forward(image_a, image_b)
+      z_attr_a, z_attr_b = self.enc_a.forward(image_a, image_b)
     if a2b:
-      output = self.gen.forward_b(self.z_content_a, self.z_attr_b)
+      output = self.gen.forward_b(z_content_a, z_attr_b)
     else:
-      output = self.gen.forward_a(self.z_content_b, self.z_attr_a)
+      output = self.gen.forward_a(z_content_b, z_attr_a)
     return output
 
   def encode(self, real_A_encoded, real_B_encoded) -> EncResult:
@@ -192,12 +192,6 @@ class DRIT(nn.Module):
     # second cross translation
     fake_A_recon = self.gen.forward_a(enc_result_recon.z_content_a, enc_result_recon.z_attr_a)
     fake_B_recon = self.gen.forward_b(enc_result_recon.z_content_b, enc_result_recon.z_attr_b)
-
-    # for latent regression
-    if self.concat:
-      mu2_a, _, mu2_b, _ = self.enc_a.forward(fake_A_random, fake_B_random)
-    else:
-      z_attr_random_a, z_attr_random_b = self.enc_a.forward(fake_A_random, fake_B_random)
     
     if not self.no_ms:
       return ForwardResult(
